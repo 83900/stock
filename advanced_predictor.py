@@ -1,3 +1,27 @@
+import torch
+import torch.nn as nn
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import matplotlib.pyplot as plt
+
+# 导入RTX 4090优化配置
+try:
+    from rtx4090_optimization import setup_rtx4090_optimization, get_optimal_batch_size
+    setup_rtx4090_optimization()
+except ImportError:
+    # 如果没有优化模块，使用基本设置
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+    
+    def get_optimal_batch_size(model_size="medium"):
+        return 32
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"使用设备: {device}")
+
 """
 高级股票预测器
 集成实时数据获取和LSTM-TCN预测模型
@@ -13,6 +37,24 @@ from stock_data import StockDataFetcher
 from lstm_tcn_model import LSTMTCNPredictor
 import warnings
 warnings.filterwarnings('ignore')
+
+# 导入RTX 4090优化配置
+try:
+    from rtx4090_optimization import setup_rtx4090_optimization, get_optimal_batch_size
+    setup_rtx4090_optimization()
+except ImportError:
+    # 如果没有优化模块，使用基本设置
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True
+    except ImportError:
+        pass
+    
+    def get_optimal_batch_size(model_size="medium"):
+        return 32
 
 class AdvancedStockPredictor:
     """高级股票预测器"""
@@ -127,8 +169,8 @@ class AdvancedStockPredictor:
             return {"error": "无法获取历史数据"}
         
         try:
-            # 训练模型
-            history = self.predictor.train(
+            # 训练模型 (PyTorch版本)
+            train_losses, val_losses = self.predictor.train_model(
                 historical_data, 
                 epochs=epochs,
                 batch_size=32,
@@ -136,11 +178,11 @@ class AdvancedStockPredictor:
             )
             
             # 评估模型
-            metrics = self.predictor.evaluate(historical_data)
+            metrics = self.predictor.evaluate_model(historical_data)
             
             # 保存模型
             if save_model:
-                model_filename = f"lstm_tcn_model_{stock_code}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5"
+                model_filename = f"lstm_tcn_model_{stock_code}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
                 self.predictor.save_model(model_filename)
                 self.model_path = model_filename
             
@@ -148,9 +190,9 @@ class AdvancedStockPredictor:
                 "success": True,
                 "stock_code": stock_code,
                 "training_samples": len(historical_data),
-                "epochs_completed": len(history.history['loss']),
-                "final_loss": float(history.history['loss'][-1]),
-                "final_val_loss": float(history.history['val_loss'][-1]),
+                "epochs_completed": epochs,
+                "final_loss": float(train_losses[-1]),
+                "final_val_loss": float(val_losses[-1]),
                 "metrics": metrics,
                 "model_path": self.model_path if save_model else None
             }
@@ -191,8 +233,8 @@ class AdvancedStockPredictor:
             if not current_data:
                 return {"error": f"无法获取股票 {stock_code} 的实时数据"}
             
-            # 进行预测
-            prediction = self.predictor.predict(historical_data)
+            # 进行预测 (PyTorch版本)
+            prediction = self.predictor.predict_stock(historical_data)
             
             # 整合结果
             result = {
@@ -216,17 +258,27 @@ class AdvancedStockPredictor:
             return {"error": str(e)}
     
     def _generate_analysis(self, current_data, prediction):
-        """生成交易分析"""
+        """生成交易分析，包括税费计算"""
         current_price = float(current_data.get('close', 0))
         predicted_price = prediction['predicted_price']
         trend = prediction['trend_prediction']
         confidence = prediction['confidence_score']
         risk_level = prediction['risk_level']
         
-        # 计算预期收益
-        expected_return = (predicted_price - current_price) / current_price * 100
+        # 税费率（中国A股标准）
+        buy_commission = 0.00025  # 买入佣金 0.025%
+        sell_commission = 0.00025  # 卖出佣金 0.025%
+        sell_stamp_tax = 0.001     # 卖出印花税 0.1%
         
-        # 生成交易建议
+        # 计算税费
+        buy_cost = current_price * buy_commission
+        sell_cost = predicted_price * (sell_commission + sell_stamp_tax)
+        
+        # 计算净预期收益
+        net_profit = predicted_price - current_price - buy_cost - sell_cost
+        expected_return = (net_profit / current_price) * 100
+        
+        # 生成交易建议（基于净收益）
         if trend == '上涨' and confidence > 0.7 and risk_level != '高风险':
             if expected_return > 2:
                 action = "强烈买入"
@@ -253,11 +305,20 @@ class AdvancedStockPredictor:
         if abs(expected_return) > 5:
             risk_factors.append("预期变动幅度大")
         
+        # 计算建议价格（示例：买入价为当前价，卖出价为预测价）
+        suggested_buy_price = round(current_price, 2)
+        suggested_sell_price = round(predicted_price, 2)
+        
         return {
             "expected_return_pct": round(expected_return, 2),
+            "net_profit": round(net_profit, 2),
+            "buy_cost": round(buy_cost, 4),
+            "sell_cost": round(sell_cost, 4),
             "trading_action": action,
             "confidence_level": "高" if confidence > 0.8 else "中" if confidence > 0.6 else "低",
             "risk_factors": risk_factors,
+            "suggested_buy_price": suggested_buy_price,
+            "suggested_sell_price": suggested_sell_price,
             "recommendation": self._get_recommendation(action, expected_return, risk_level)
         }
     
@@ -425,11 +486,8 @@ def main():
     # 预测单只股票
     prediction = predictor.predict_stock("000001")
     if "error" not in prediction:
-        print(f"股票: {prediction['stock_name']} ({prediction['stock_code']})")
-        print(f"当前价格: {prediction['current_price']:.2f}")
-        print(f"预测价格: {prediction['prediction']['predicted_price']:.2f}")
-        print(f"趋势预测: {prediction['prediction']['trend_prediction']}")
-        print(f"建议操作: {prediction['analysis']['trading_action']}")
+        analysis = prediction['analysis']
+        print(f"{prediction['stock_name']}股，买入价格输入：{analysis['suggested_buy_price']} 卖出价格输入：{analysis['suggested_sell_price']}")
     
     print("\n3. 批量预测示例...")
     # 批量预测

@@ -138,27 +138,33 @@ cd stock_prediction
 
 ### 步骤2: 安装依赖
 ```bash
-# GPU版本 (推荐)
-pip install -r requirements_gpu.txt
+# 基础依赖安装
+pip install -r requirements.txt
 
-# 如果遇到TensorFlow安装问题
-pip install tensorflow[and-cuda]>=2.12.0
+# GPU版本PyTorch安装 (推荐，根据CUDA版本选择)
+# CUDA 11.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# CUDA 12.1
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # 验证GPU可用性
-python -c "import tensorflow as tf; print('GPU Available:', tf.config.list_physical_devices('GPU'))"
+python -c "import torch; print('GPU Available:', torch.cuda.is_available()); print('GPU Count:', torch.cuda.device_count())"
 ```
 
 ### 步骤3: 验证环境
 ```bash
 # 运行环境检查脚本
 python -c "
-import tensorflow as tf
+import torch
 import pandas as pd
 import numpy as np
 from adata import stock
 print('✓ 所有依赖已正确安装')
-print(f'✓ TensorFlow版本: {tf.__version__}')
-print(f'✓ GPU可用: {len(tf.config.list_physical_devices(\"GPU\")) > 0}')
+print(f'✓ PyTorch版本: {torch.__version__}')
+print(f'✓ GPU可用: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'✓ GPU设备: {torch.cuda.get_device_name(0)}')
+    print(f'✓ CUDA版本: {torch.version.cuda}')
 "
 ```
 
@@ -233,7 +239,7 @@ python web_app.py
 # 修改web_app.py，添加预测接口
 from advanced_predictor import AdvancedStockPredictor
 
-predictor = AdvancedStockPredictor("best_model.h5")
+predictor = AdvancedStockPredictor("best_model.pth")
 
 @app.route('/api/predict/<stock_code>')
 def predict_api(stock_code):
@@ -265,7 +271,7 @@ import sys
 from advanced_predictor import AdvancedStockPredictor
 
 stock_code = sys.argv[1] if len(sys.argv) > 1 else '000001'
-predictor = AdvancedStockPredictor('lstm_tcn_model_000001_*.h5')
+predictor = AdvancedStockPredictor('lstm_tcn_model_000001_*.pth')
 result = predictor.predict_stock(stock_code)
 print(f'预测结果: {result}')
 " 000001
@@ -276,42 +282,54 @@ print(f'预测结果: {result}')
 ### 1. GPU优化
 ```python
 # 在模型训练前添加GPU配置
-import tensorflow as tf
+import torch
 
-# 设置GPU内存增长
-gpus = tf.config.experimental.list_physical_devices('GPU')
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-    except RuntimeError as e:
-        print(e)
+# 设置GPU设备
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f'使用设备: {device}')
 
-# 启用混合精度训练 (提升速度)
-from tensorflow.keras.mixed_precision import Policy
-policy = Policy('mixed_float16')
-tf.keras.mixed_precision.set_global_policy(policy)
+# 启用混合精度训练 (提升速度，需要GPU支持)
+if torch.cuda.is_available():
+    from torch.cuda.amp import GradScaler, autocast
+    scaler = GradScaler()
+    
+    # 在训练循环中使用
+    with autocast():
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+    
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
 ```
 
 ### 2. 数据加载优化
 ```python
-# 使用tf.data优化数据管道
-def create_dataset(X, y, batch_size=32):
-    dataset = tf.data.Dataset.from_tensor_slices((X, y))
-    dataset = dataset.batch(batch_size)
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
-    return dataset
+# 使用PyTorch DataLoader优化数据管道
+from torch.utils.data import DataLoader
+
+def create_dataloader(dataset, batch_size=32, num_workers=4):
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,  # 多进程加载
+        pin_memory=True,          # 加速GPU传输
+        persistent_workers=True   # 保持worker进程
+    )
+    return dataloader
 ```
 
 ### 3. 模型优化
 ```python
 # 在LSTMTCNPredictor中添加优化选项
 class LSTMTCNPredictor:
-    def __init__(self, ..., use_mixed_precision=True, use_xla=True):
-        if use_mixed_precision:
-            tf.keras.mixed_precision.set_global_policy('mixed_float16')
+    def __init__(self, ..., use_mixed_precision=True, compile_model=True):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.use_mixed_precision = use_mixed_precision and torch.cuda.is_available()
         
-        if use_xla:
+        if compile_model and hasattr(torch, 'compile'):
+            # PyTorch 2.0+ 编译优化
             tf.config.optimizer.set_jit(True)
 ```
 
@@ -347,16 +365,17 @@ tf.config.experimental.set_memory_growth(gpu, True)
 
 #### 2. CUDA版本不匹配
 ```bash
-# 错误信息: Could not load dynamic library 'libcudart.so.11.0'
+# 错误信息: RuntimeError: CUDA error: no kernel image is available for execution on the device
 
 # 解决方案:
 # 1. 检查CUDA版本
 nvidia-smi
 nvcc --version
 
-# 2. 安装匹配的TensorFlow版本
-# CUDA 11.2 -> tensorflow-gpu==2.8.0
-# CUDA 11.8 -> tensorflow-gpu>=2.12.0
+# 2. 安装匹配的PyTorch版本
+# CUDA 11.8 -> torch>=2.0.0+cu118
+# CUDA 12.1 -> torch>=2.0.0+cu121
+# 或访问 https://pytorch.org/get-started/locally/ 获取最新安装命令
 ```
 
 #### 3. 数据获取失败
@@ -443,7 +462,7 @@ result = predictor.train_model(
         "mape": 1.23,
         "trend_accuracy": 0.85
     },
-    "model_path": "lstm_tcn_model_000001_20241025_143022.h5"
+    "model_path": "lstm_tcn_model_000001_20241025_143022.pth"
 }
 ```
 

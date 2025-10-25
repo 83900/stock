@@ -1,6 +1,6 @@
 # LSTM-TCN股票预测系统
 
-一个基于深度学习的高精度股票预测系统，结合实时数据获取和LSTM-TCN联合模型，专为短线交易设计。
+一个基于PyTorch深度学习的高精度股票预测系统，结合实时数据获取和LSTM-TCN联合模型，专为短线交易设计。
 
 ## 🌟 主要特性
 
@@ -11,6 +11,7 @@
 
 ### 预测模型
 - **LSTM-TCN联合架构**: 结合长短期记忆网络和时间卷积网络的优势
+- **PyTorch实现**: 使用PyTorch框架构建，支持GPU加速
 - **多任务学习**: 同时预测价格、趋势和波动率
 - **注意力机制**: 提升模型对关键时间点的关注
 - **高精度预测**: MAPE通常在1-3%之间，趋势准确率>80%
@@ -45,18 +46,19 @@ python quick_start.py --mode data
 python quick_start.py --mode train --stock 000001 --epochs 50
 
 # 仅进行预测
-python quick_start.py --mode predict --stock 000001 --model your_model.h5
+python quick_start.py --mode predict --stock 000001 --model your_model.pth
 ```
 
 ### 方法2: 分步操作
 
 #### 1. 环境准备
 ```bash
-# 安装依赖 (CPU版本)
+# 安装依赖 (包含PyTorch CPU版本)
 pip install -r requirements.txt
 
-# 安装依赖 (GPU版本，推荐用于算力平台)
-pip install -r requirements_gpu.txt
+# 如需GPU加速，请根据CUDA版本安装对应的PyTorch
+# CUDA 11.8: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
 #### 2. 数据获取测试
@@ -116,15 +118,14 @@ python web_app.py
 - `web_app.py` - Web界面和API服务
 
 ### 预测模型模块
-- `lstm_tcn_model.py` - LSTM-TCN联合模型核心实现
+- `lstm_tcn_model.py` - LSTM-TCN联合模型核心实现 (PyTorch)
 - `advanced_predictor.py` - 高级预测器，集成数据获取和模型预测
-- `prediction_models.py` - 多种预测模型对比 (LSTM, XGBoost, Random Forest等)
+- `prediction_models.py` - 多种预测模型对比 (LSTM, XGBoost, Random Forest等，PyTorch实现)
 - `test_prediction_models.py` - 模型性能测试脚本
 
 ### 工具和配置
 - `quick_start.py` - 快速启动和演示脚本
-- `requirements.txt` - 基础依赖 (CPU版本)
-- `requirements_gpu.txt` - GPU版本依赖 (用于算力平台)
+- `requirements.txt` - 项目依赖 (包含PyTorch CPU版本)
 - `DEPLOYMENT_GUIDE.md` - 详细部署指南
 
 ## 💡 使用场景
@@ -147,17 +148,18 @@ python web_app.py
 ## 🔧 算力平台部署
 
 ### 推荐配置
-- **GPU**: NVIDIA RTX 4090 / A100 / V100
+- **GPU**: NVIDIA RTX 4090 / A100 / V100 (支持CUDA 11.8+)
 - **显存**: ≥ 16GB VRAM  
 - **内存**: ≥ 32GB RAM
 - **算力平台**: AutoDL (性价比) / 阿里云PAI / 腾讯云TI-ONE
 
 ### 部署步骤
 1. 上传代码到算力平台
-2. 安装GPU版本依赖: `pip install -r requirements_gpu.txt`
-3. 运行快速测试: `python quick_start.py --mode check`
-4. 训练模型: `python quick_start.py --mode train --epochs 100`
-5. 开始预测: `python quick_start.py --mode predict`
+2. 安装基础依赖: `pip install -r requirements.txt`
+3. 安装GPU版本PyTorch: `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`
+4. 运行快速测试: `python quick_start.py --mode check`
+5. 训练模型: `python quick_start.py --mode train --epochs 100`
+6. 开始预测: `python quick_start.py --mode predict`
 
 详细部署指南请参考: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
 

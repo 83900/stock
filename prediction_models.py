@@ -11,11 +11,50 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error, mean_absolute_error
 import xgboost as xgb
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 import warnings
 warnings.filterwarnings('ignore')
+
+# 设置设备
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+class StockDataset(Dataset):
+    """PyTorch数据集类"""
+    def __init__(self, X, y):
+        self.X = torch.FloatTensor(X)
+        self.y = torch.FloatTensor(y)
+    
+    def __len__(self):
+        return len(self.X)
+    
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
+
+class SimpleLSTM(nn.Module):
+    """简单的LSTM模型"""
+    def __init__(self, input_size, hidden_size=50, num_layers=2, output_size=1, dropout=0.2):
+        super(SimpleLSTM, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
+                           batch_first=True, dropout=dropout)
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_size, output_size)
+        
+    def forward(self, x):
+        # LSTM层
+        lstm_out, _ = self.lstm(x)
+        # 取最后一个时间步的输出
+        lstm_out = lstm_out[:, -1, :]
+        # Dropout
+        lstm_out = self.dropout(lstm_out)
+        # 全连接层
+        output = self.fc(lstm_out)
+        return output
 
 class StockPredictionModels:
     def __init__(self):
@@ -49,56 +88,49 @@ class StockPredictionModels:
         rs = gain / loss
         data['rsi'] = 100 - (100 / (1 + rs))
         
-        # 成交量相关
-        if 'volume' in data.columns:
-            data['volume_ma'] = data['volume'].rolling(window=5).mean()
-            data['volume_ratio'] = data['volume'] / data['volume_ma']
-        
-        # 创建滞后特征
-        for i in range(1, lookback_days + 1):
-            data[f'close_lag_{i}'] = data[target_col].shift(i)
-            data[f'volume_lag_{i}'] = data['volume'].shift(i) if 'volume' in data.columns else 0
-        
-        # 创建目标变量（分类：涨跌）
-        data['target_direction'] = (data[target_col].shift(-1) > data[target_col]).astype(int)
-        
-        # 创建目标变量（回归：下一日价格）
-        data['target_price'] = data[target_col].shift(-1)
-        
         # 删除包含NaN的行
         data = data.dropna()
         
-        return data
+        # 创建特征和目标变量
+        feature_cols = ['ma5', 'ma10', 'ma20', 'price_change', 'price_change_5', 'volatility', 'rsi']
+        X = data[feature_cols].values
+        
+        # 创建目标变量（下一天的价格变化）
+        y_price = data[target_col].shift(-1).dropna().values
+        X = X[:-1]  # 对应调整X的长度
+        
+        # 创建分类目标（涨跌）
+        y_class = (y_price > data[target_col].iloc[:-1].values).astype(int)
+        
+        return X, y_price, y_class
     
     def create_lstm_data(self, data, target_col='close', lookback_days=10):
         """
-        为LSTM创建序列数据
+        为LSTM创建时间序列数据
         """
-        scaler = MinMaxScaler()
-        scaled_data = scaler.fit_transform(data[[target_col]])
+        # 准备基础数据
+        X, y_price, y_class = self.prepare_data(data, target_col)
         
-        X, y = [], []
-        for i in range(lookback_days, len(scaled_data) - 1):
-            X.append(scaled_data[i-lookback_days:i, 0])
-            y.append(scaled_data[i+1, 0])
+        # 创建时间序列数据
+        X_lstm, y_lstm = [], []
+        for i in range(lookback_days, len(X)):
+            X_lstm.append(X[i-lookback_days:i])
+            y_lstm.append(y_price[i])
         
-        return np.array(X), np.array(y), scaler
+        return np.array(X_lstm), np.array(y_lstm)
     
     def build_lstm_model(self, input_shape):
         """
-        构建LSTM模型
+        构建PyTorch LSTM模型
         """
-        model = Sequential([
-            LSTM(50, return_sequences=True, input_shape=input_shape),
-            Dropout(0.2),
-            LSTM(50, return_sequences=False),
-            Dropout(0.2),
-            Dense(25),
-            Dense(1)
-        ])
-        
-        model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
-        return model
+        model = SimpleLSTM(
+            input_size=input_shape[1],  # 特征数量
+            hidden_size=50,
+            num_layers=2,
+            output_size=1,
+            dropout=0.2
+        )
+        return model.to(device)
     
     def train_lstm(self, data, target_col='close', lookback_days=10):
         """
@@ -106,59 +138,101 @@ class StockPredictionModels:
         """
         print("训练LSTM模型...")
         
-        X, y, scaler = self.create_lstm_data(data, target_col, lookback_days)
+        # 准备数据
+        X, y = self.create_lstm_data(data, target_col, lookback_days)
+        
+        # 数据标准化
+        scaler_X = StandardScaler()
+        scaler_y = StandardScaler()
+        
+        X_scaled = scaler_X.fit_transform(X.reshape(-1, X.shape[-1])).reshape(X.shape)
+        y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).flatten()
         
         # 分割数据
-        split_idx = int(len(X) * 0.8)
-        X_train, X_test = X[:split_idx], X[split_idx:]
-        y_train, y_test = y[:split_idx], y[split_idx:]
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled, y_scaled, test_size=0.2, random_state=42
+        )
         
-        # 重塑数据
-        X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
-        X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+        # 创建数据集和数据加载器
+        train_dataset = StockDataset(X_train, y_train)
+        test_dataset = StockDataset(X_test, y_test)
         
-        # 构建和训练模型
-        model = self.build_lstm_model((X_train.shape[1], 1))
-        model.fit(X_train, y_train, epochs=50, batch_size=32, verbose=0)
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
         
-        # 预测
-        y_pred = model.predict(X_test)
+        # 构建模型
+        model = self.build_lstm_model(X.shape)
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
         
-        # 反归一化
-        y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
-        y_pred_actual = scaler.inverse_transform(y_pred).flatten()
+        # 训练模型
+        model.train()
+        train_losses = []
+        
+        for epoch in range(50):
+            epoch_loss = 0
+            for batch_X, batch_y in train_loader:
+                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+                
+                optimizer.zero_grad()
+                outputs = model(batch_X).squeeze()
+                loss = criterion(outputs, batch_y)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+            
+            avg_loss = epoch_loss / len(train_loader)
+            train_losses.append(avg_loss)
+            
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch}, Loss: {avg_loss:.6f}")
+        
+        # 评估模型
+        model.eval()
+        predictions = []
+        actuals = []
+        
+        with torch.no_grad():
+            for batch_X, batch_y in test_loader:
+                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+                outputs = model(batch_X).squeeze()
+                predictions.extend(outputs.cpu().numpy())
+                actuals.extend(batch_y.cpu().numpy())
+        
+        predictions = np.array(predictions)
+        actuals = np.array(actuals)
+        
+        # 反标准化
+        predictions = scaler_y.inverse_transform(predictions.reshape(-1, 1)).flatten()
+        actuals = scaler_y.inverse_transform(actuals.reshape(-1, 1)).flatten()
         
         # 计算指标
-        mse = mean_squared_error(y_test_actual, y_pred_actual)
-        mae = mean_absolute_error(y_test_actual, y_pred_actual)
+        mse = mean_squared_error(actuals, predictions)
+        mae = mean_absolute_error(actuals, predictions)
         
-        # 计算方向准确率
-        direction_actual = (y_test_actual[1:] > y_test_actual[:-1]).astype(int)
-        direction_pred = (y_pred_actual[1:] > y_pred_actual[:-1]).astype(int)
-        direction_accuracy = accuracy_score(direction_actual, direction_pred)
-        
-        self.models['LSTM'] = model
-        self.scalers['LSTM'] = scaler
+        # 保存模型和缩放器
+        self.models['lstm'] = model
+        self.scalers['lstm'] = {'X': scaler_X, 'y': scaler_y}
         
         return {
-            'MSE': mse,
-            'MAE': mae,
-            'Direction_Accuracy': direction_accuracy,
-            'Model_Type': 'Regression'
+            'model': 'LSTM',
+            'mse': mse,
+            'mae': mae,
+            'rmse': np.sqrt(mse),
+            'train_losses': train_losses
         }
     
     def train_xgboost(self, data, target_type='classification'):
         """
         训练XGBoost模型
         """
-        print("训练XGBoost模型...")
+        print(f"训练XGBoost模型 ({target_type})...")
         
-        # 准备特征
-        feature_cols = [col for col in data.columns if col not in ['target_direction', 'target_price', 'date']]
-        X = data[feature_cols]
+        X, y_price, y_class = self.prepare_data(data)
         
         if target_type == 'classification':
-            y = data['target_direction']
+            y = y_class
             model = xgb.XGBClassifier(
                 n_estimators=100,
                 max_depth=6,
@@ -166,7 +240,7 @@ class StockPredictionModels:
                 random_state=42
             )
         else:
-            y = data['target_price']
+            y = y_price
             model = xgb.XGBRegressor(
                 n_estimators=100,
                 max_depth=6,
@@ -175,7 +249,9 @@ class StockPredictionModels:
             )
         
         # 分割数据
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
         
         # 训练模型
         model.fit(X_train, y_train)
@@ -183,52 +259,50 @@ class StockPredictionModels:
         # 预测
         y_pred = model.predict(X_test)
         
-        # 计算指标
+        # 保存模型
+        self.models[f'xgboost_{target_type}'] = model
+        
         if target_type == 'classification':
             accuracy = accuracy_score(y_test, y_pred)
-            precision = precision_score(y_test, y_pred)
-            recall = recall_score(y_test, y_pred)
-            f1 = f1_score(y_test, y_pred)
+            precision = precision_score(y_test, y_pred, average='weighted')
+            recall = recall_score(y_test, y_pred, average='weighted')
+            f1 = f1_score(y_test, y_pred, average='weighted')
             
-            result = {
-                'Accuracy': accuracy,
-                'Precision': precision,
-                'Recall': recall,
-                'F1_Score': f1,
-                'Model_Type': 'Classification'
+            return {
+                'model': f'XGBoost ({target_type})',
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1
             }
         else:
             mse = mean_squared_error(y_test, y_pred)
             mae = mean_absolute_error(y_test, y_pred)
             
-            result = {
-                'MSE': mse,
-                'MAE': mae,
-                'Model_Type': 'Regression'
+            return {
+                'model': f'XGBoost ({target_type})',
+                'mse': mse,
+                'mae': mae,
+                'rmse': np.sqrt(mse)
             }
-        
-        self.models['XGBoost'] = model
-        return result
     
     def train_random_forest(self, data, target_type='classification'):
         """
         训练随机森林模型
         """
-        print("训练随机森林模型...")
+        print(f"训练随机森林模型 ({target_type})...")
         
-        # 准备特征
-        feature_cols = [col for col in data.columns if col not in ['target_direction', 'target_price', 'date']]
-        X = data[feature_cols]
+        X, y_price, y_class = self.prepare_data(data)
         
         if target_type == 'classification':
-            y = data['target_direction']
+            y = y_class
             model = RandomForestClassifier(
                 n_estimators=100,
                 max_depth=10,
                 random_state=42
             )
         else:
-            y = data['target_price']
+            y = y_price
             model = RandomForestRegressor(
                 n_estimators=100,
                 max_depth=10,
@@ -236,7 +310,9 @@ class StockPredictionModels:
             )
         
         # 分割数据
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
         
         # 训练模型
         model.fit(X_train, y_train)
@@ -244,56 +320,56 @@ class StockPredictionModels:
         # 预测
         y_pred = model.predict(X_test)
         
-        # 计算指标
+        # 保存模型
+        self.models[f'rf_{target_type}'] = model
+        
         if target_type == 'classification':
             accuracy = accuracy_score(y_test, y_pred)
-            precision = precision_score(y_test, y_pred)
-            recall = recall_score(y_test, y_pred)
-            f1 = f1_score(y_test, y_pred)
+            precision = precision_score(y_test, y_pred, average='weighted')
+            recall = recall_score(y_test, y_pred, average='weighted')
+            f1 = f1_score(y_test, y_pred, average='weighted')
             
-            result = {
-                'Accuracy': accuracy,
-                'Precision': precision,
-                'Recall': recall,
-                'F1_Score': f1,
-                'Model_Type': 'Classification'
+            return {
+                'model': f'Random Forest ({target_type})',
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1
             }
         else:
             mse = mean_squared_error(y_test, y_pred)
             mae = mean_absolute_error(y_test, y_pred)
             
-            result = {
-                'MSE': mse,
-                'MAE': mae,
-                'Model_Type': 'Regression'
+            return {
+                'model': f'Random Forest ({target_type})',
+                'mse': mse,
+                'mae': mae,
+                'rmse': np.sqrt(mse)
             }
-        
-        self.models['RandomForest'] = model
-        return result
     
     def train_svm(self, data, target_type='classification'):
         """
         训练SVM模型
         """
-        print("训练SVM模型...")
+        print(f"训练SVM模型 ({target_type})...")
         
-        # 准备特征
-        feature_cols = [col for col in data.columns if col not in ['target_direction', 'target_price', 'date']]
-        X = data[feature_cols]
+        X, y_price, y_class = self.prepare_data(data)
         
-        # 标准化特征
+        # 数据标准化
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
         
         if target_type == 'classification':
-            y = data['target_direction']
+            y = y_class
             model = SVC(kernel='rbf', C=1.0, random_state=42)
         else:
-            y = data['target_price']
+            y = y_price
             model = SVR(kernel='rbf', C=1.0)
         
         # 分割数据
-        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled, y, test_size=0.2, random_state=42
+        )
         
         # 训练模型
         model.fit(X_train, y_train)
@@ -301,33 +377,33 @@ class StockPredictionModels:
         # 预测
         y_pred = model.predict(X_test)
         
-        # 计算指标
+        # 保存模型和缩放器
+        self.models[f'svm_{target_type}'] = model
+        self.scalers[f'svm_{target_type}'] = scaler
+        
         if target_type == 'classification':
             accuracy = accuracy_score(y_test, y_pred)
-            precision = precision_score(y_test, y_pred)
-            recall = recall_score(y_test, y_pred)
-            f1 = f1_score(y_test, y_pred)
+            precision = precision_score(y_test, y_pred, average='weighted')
+            recall = recall_score(y_test, y_pred, average='weighted')
+            f1 = f1_score(y_test, y_pred, average='weighted')
             
-            result = {
-                'Accuracy': accuracy,
-                'Precision': precision,
-                'Recall': recall,
-                'F1_Score': f1,
-                'Model_Type': 'Classification'
+            return {
+                'model': f'SVM ({target_type})',
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1
             }
         else:
             mse = mean_squared_error(y_test, y_pred)
             mae = mean_absolute_error(y_test, y_pred)
             
-            result = {
-                'MSE': mse,
-                'MAE': mae,
-                'Model_Type': 'Regression'
+            return {
+                'model': f'SVM ({target_type})',
+                'mse': mse,
+                'mae': mae,
+                'rmse': np.sqrt(mse)
             }
-        
-        self.models['SVM'] = model
-        self.scalers['SVM'] = scaler
-        return result
     
     def compare_models(self, data):
         """
@@ -335,96 +411,123 @@ class StockPredictionModels:
         """
         print("开始模型比较...")
         
-        # 准备数据
-        prepared_data = self.prepare_data(data)
-        
         # 训练所有模型
-        results = {}
+        results = []
         
-        # LSTM (回归)
+        # LSTM
         try:
-            results['LSTM'] = self.train_lstm(data)
+            lstm_result = self.train_lstm(data)
+            results.append(lstm_result)
+            self.results['lstm'] = lstm_result
         except Exception as e:
             print(f"LSTM训练失败: {e}")
-            results['LSTM'] = None
         
-        # XGBoost (分类)
+        # XGBoost
         try:
-            results['XGBoost_Classification'] = self.train_xgboost(prepared_data, 'classification')
+            xgb_class_result = self.train_xgboost(data, 'classification')
+            xgb_reg_result = self.train_xgboost(data, 'regression')
+            results.extend([xgb_class_result, xgb_reg_result])
+            self.results['xgboost_classification'] = xgb_class_result
+            self.results['xgboost_regression'] = xgb_reg_result
         except Exception as e:
-            print(f"XGBoost分类训练失败: {e}")
-            results['XGBoost_Classification'] = None
+            print(f"XGBoost训练失败: {e}")
         
-        # 随机森林 (分类)
+        # Random Forest
         try:
-            results['RandomForest_Classification'] = self.train_random_forest(prepared_data, 'classification')
+            rf_class_result = self.train_random_forest(data, 'classification')
+            rf_reg_result = self.train_random_forest(data, 'regression')
+            results.extend([rf_class_result, rf_reg_result])
+            self.results['rf_classification'] = rf_class_result
+            self.results['rf_regression'] = rf_reg_result
         except Exception as e:
-            print(f"随机森林分类训练失败: {e}")
-            results['RandomForest_Classification'] = None
+            print(f"Random Forest训练失败: {e}")
         
-        # SVM (分类)
+        # SVM
         try:
-            results['SVM_Classification'] = self.train_svm(prepared_data, 'classification')
+            svm_class_result = self.train_svm(data, 'classification')
+            svm_reg_result = self.train_svm(data, 'regression')
+            results.extend([svm_class_result, svm_reg_result])
+            self.results['svm_classification'] = svm_class_result
+            self.results['svm_regression'] = svm_reg_result
         except Exception as e:
-            print(f"SVM分类训练失败: {e}")
-            results['SVM_Classification'] = None
+            print(f"SVM训练失败: {e}")
         
-        self.results = results
         return results
     
     def print_results(self):
         """
-        打印模型比较结果
+        打印所有模型的结果
         """
         print("\n" + "="*60)
-        print("股票预测模型性能比较")
+        print("模型性能比较结果")
         print("="*60)
         
         for model_name, result in self.results.items():
-            if result is None:
-                continue
-                
-            print(f"\n{model_name}:")
-            print("-" * 30)
-            
-            if result['Model_Type'] == 'Classification':
-                print(f"准确率: {result['Accuracy']:.4f}")
-                print(f"精确率: {result['Precision']:.4f}")
-                print(f"召回率: {result['Recall']:.4f}")
-                print(f"F1分数: {result['F1_Score']:.4f}")
-            else:
-                print(f"均方误差: {result['MSE']:.4f}")
-                print(f"平均绝对误差: {result['MAE']:.4f}")
-                if 'Direction_Accuracy' in result:
-                    print(f"方向准确率: {result['Direction_Accuracy']:.4f}")
+            print(f"\n{result['model']}:")
+            for metric, value in result.items():
+                if metric != 'model' and metric != 'train_losses':
+                    if isinstance(value, float):
+                        print(f"  {metric}: {value:.4f}")
+                    else:
+                        print(f"  {metric}: {value}")
     
     def get_recommendation(self):
         """
-        根据结果给出推荐
+        基于模型结果给出推荐
         """
         print("\n" + "="*60)
         print("模型推荐")
         print("="*60)
         
-        print("\n基于研究结果的推荐：")
-        print("\n1. 短线交易最佳选择：")
-        print("   - XGBoost + 随机森林组合模型")
-        print("   - 准确率通常在85-90%之间")
-        print("   - 适合日内交易决策")
+        print("\n📊 分类任务推荐 (预测涨跌):")
+        print("1. XGBoost: 在金融数据上表现优异，特征重要性清晰")
+        print("2. Random Forest: 稳定性好，抗过拟合")
+        print("3. SVM: 在小数据集上表现良好")
         
-        print("\n2. 模型特点：")
-        print("   - XGBoost：处理非线性关系强，特征重要性清晰")
-        print("   - 随机森林：稳定性好，抗过拟合能力强")
-        print("   - LSTM：捕捉时间序列长期依赖，但需要大量数据")
-        print("   - SVM：在小数据集上表现好，但计算复杂度高")
+        print("\n📈 回归任务推荐 (预测价格):")
+        print("1. LSTM: 擅长时间序列预测，能捕捉长期依赖")
+        print("2. XGBoost: 非线性关系处理能力强")
+        print("3. Random Forest: 稳定可靠的基准模型")
         
-        print("\n3. 实际应用建议：")
-        print("   - 使用XGBoost进行主要预测")
-        print("   - 随机森林作为验证模型")
-        print("   - 结合技术指标和成交量数据")
-        print("   - 设置止损和止盈点")
+        print("\n💡 实际应用建议:")
+        print("- 短线交易: 推荐XGBoost分类模型")
+        print("- 价格预测: 推荐LSTM回归模型")
+        print("- 风险控制: 推荐Random Forest（稳定性好）")
+        print("- 模型集成: 结合多个模型的预测结果")
 
 if __name__ == "__main__":
-    # 示例用法
+    # 生成示例数据
     print("股票预测模型测试")
-    print("请确保已安装所需依赖：pip install tensorflow xgboost scikit-learn")
+    print("请确保已安装所需依赖：pip install torch xgboost scikit-learn")
+    
+    # 生成模拟股票数据
+    import pandas as pd
+    from datetime import datetime, timedelta
+    
+    dates = pd.date_range('2023-01-01', periods=500, freq='D')
+    np.random.seed(42)
+    
+    # 生成模拟价格数据
+    price = 100
+    prices = [price]
+    for i in range(499):
+        change = np.random.normal(0, 0.02)
+        price = price * (1 + change)
+        prices.append(price)
+    
+    data = pd.DataFrame({
+        'date': dates,
+        'close': prices
+    })
+    
+    # 创建模型比较器
+    models = StockPredictionModels()
+    
+    # 比较所有模型
+    results = models.compare_models(data)
+    
+    # 打印结果
+    models.print_results()
+    
+    # 给出推荐
+    models.get_recommendation()

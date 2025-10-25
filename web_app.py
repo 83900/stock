@@ -513,11 +513,25 @@ def main():
     
     # 启动Web应用
     print("正在启动Web服务器...")
-    print("访问地址: http://localhost:5000")
+    
+    # 检测运行环境
+    import os
+    if 'AUTODL_CONTAINER_ID' in os.environ:
+        # AutoDL环境
+        port = 6006
+        print("检测到AutoDL环境，使用端口6006")
+        print("访问地址: http://localhost:6006")
+        print("外网访问: 请查看AutoDL控制台的自定义服务地址")
+    else:
+        # 本地环境
+        port = 5000
+        print("本地环境，使用端口5000")
+        print("访问地址: http://localhost:5000")
+    
     print("按 Ctrl+C 停止服务")
     
     try:
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        app.run(host='0.0.0.0', port=port, debug=False)
     except KeyboardInterrupt:
         print("\n服务已停止")
 

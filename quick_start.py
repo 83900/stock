@@ -14,15 +14,17 @@ def check_environment():
     print("🔍 检查运行环境...")
     
     try:
-        import tensorflow as tf
-        print(f"✓ TensorFlow版本: {tf.__version__}")
+        import torch
+        print(f"✓ PyTorch版本: {torch.__version__}")
         
         # 检查GPU
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            print(f"✓ 检测到GPU: {len(gpus)}个")
-            for i, gpu in enumerate(gpus):
-                print(f"  GPU {i}: {gpu.name}")
+        if torch.cuda.is_available():
+            gpu_count = torch.cuda.device_count()
+            print(f"✓ 检测到GPU: {gpu_count}个")
+            for i in range(gpu_count):
+                gpu_name = torch.cuda.get_device_name(i)
+                print(f"  GPU {i}: {gpu_name}")
+            print(f"✓ CUDA版本: {torch.version.cuda}")
         else:
             print("⚠️  未检测到GPU，将使用CPU训练（速度较慢）")
         
@@ -40,7 +42,7 @@ def check_environment():
         
     except ImportError as e:
         print(f"❌ 环境检查失败: {e}")
-        print("请运行: pip install -r requirements_gpu.txt")
+        print("请运行: pip install -r requirements.txt")
         return False
 
 def demo_data_fetching():
@@ -117,22 +119,25 @@ def demo_prediction(model_path=None, stock_code="000001"):
         predictor = AdvancedStockPredictor(model_path)
         
         # 进行预测
-        print("正在预测...")
+        print("开始预测...")
         result = predictor.predict_stock(stock_code)
         
         if "error" not in result:
             print("✓ 预测成功!")
-            print(f"  股票名称: {result['stock_name']}")
-            print(f"  当前价格: ¥{result['current_price']:.2f}")
-            print(f"  预测价格: ¥{result['prediction']['predicted_price']:.2f}")
-            print(f"  趋势预测: {result['prediction']['trend_prediction']}")
-            print(f"  置信度: {result['prediction']['confidence_score']:.2f}")
-            print(f"  风险等级: {result['prediction']['risk_level']}")
+            prediction = result['prediction']
+            analysis = result.get('analysis', {})
             
-            if "analysis" in result:
-                analysis = result["analysis"]
+            print(f"  当前价格: ¥{result['current_price']:.2f}")
+            print(f"  预测价格: ¥{prediction['predicted_price']:.2f}")
+            print(f"  趋势预测: {prediction['trend_prediction']}")
+            print(f"  置信度: {prediction['confidence_score']:.2f}")
+            print(f"  风险等级: {prediction['risk_level']}")
+            
+            if analysis:
+                print(f"  交易建议: {analysis['trading_action']}")
                 print(f"  预期收益: {analysis['expected_return_pct']:+.2f}%")
-                print(f"  建议操作: {analysis['trading_action']}")
+                print(f"  建议买入价: ¥{analysis['suggested_buy_price']:.2f}")
+                print(f"  建议卖出价: ¥{analysis['suggested_sell_price']:.2f}")
             
             return True
         else:
@@ -150,25 +155,19 @@ def demo_batch_prediction():
     try:
         from advanced_predictor import AdvancedStockPredictor
         
+        # 创建预测器
         predictor = AdvancedStockPredictor()
         
-        # 热门股票列表
-        stocks = ["000001", "000002", "600036"]
+        # 热门股票代码
+        stock_codes = ["000001", "000002", "600036"]
         
-        print(f"批量预测 {len(stocks)} 只股票...")
-        results = predictor.batch_predict(stocks, save_results=False)
+        print(f"批量预测 {len(stock_codes)} 只股票...")
+        results = predictor.batch_predict(stock_codes, save_results=False)
         
         print(f"✓ 批量预测完成!")
         print(f"  成功率: {results['success_rate']:.1f}%")
         print(f"  成功预测: {results['successful_predictions']} 只")
         print(f"  失败预测: {results['failed_predictions']} 只")
-        
-        # 显示成功的预测结果
-        for stock_code, result in results['results'].items():
-            if "error" not in result:
-                trend = result['prediction']['trend_prediction']
-                confidence = result['prediction']['confidence_score']
-                print(f"  {result['stock_name']} ({stock_code}): {trend} (置信度: {confidence:.2f})")
         
         return True
         
@@ -178,15 +177,15 @@ def demo_batch_prediction():
 
 def demo_web_interface():
     """演示Web界面"""
-    print("\n🌐 启动Web界面...")
+    print("\n🌐 演示Web界面...")
     
     try:
-        print("Web界面将在后台启动...")
+        print("启动Web服务...")
         print("请在浏览器中访问: http://localhost:8080")
-        print("按 Ctrl+C 停止Web服务")
+        print("按 Ctrl+C 停止服务")
         
         # 这里不实际启动，只是提示
-        print("💡 要启动Web界面，请运行: python web_app.py")
+        print("✓ Web界面演示完成 (实际启动请运行: python web_app.py)")
         return True
         
     except Exception as e:
@@ -235,17 +234,13 @@ def main():
     print("\n" + "=" * 50)
     if success:
         print("✅ 所有演示完成!")
-        print("\n📚 下一步:")
-        print("1. 查看详细文档: DEPLOYMENT_GUIDE.md")
-        print("2. 在算力平台部署: 参考部署指南")
-        print("3. 自定义训练: 修改参数重新训练")
-        print("4. 集成到交易系统: 使用API接口")
+        print("\n📖 下一步:")
+        print("1. 运行完整训练: python quick_start.py --mode train --epochs 100")
+        print("2. 启动Web服务: python web_app.py")
+        print("3. 查看详细文档: README.md")
     else:
         print("❌ 演示过程中出现错误")
         print("请检查环境配置和依赖安装")
-    
-    print("\n⚠️  投资风险提示:")
-    print("本系统仅供学习和研究使用，投资有风险，决策需谨慎！")
 
 if __name__ == "__main__":
     main()

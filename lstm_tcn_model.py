@@ -1,190 +1,225 @@
 """
-LSTM-TCN联合股票预测模型
+LSTM-TCN联合股票预测模型 (PyTorch版本)
 结合LSTM的时序记忆能力和TCN的并行计算优势，实现高精度股票价格预测
 适用于短线交易策略
 """
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
-    Input, LSTM, Dense, Dropout, BatchNormalization, 
-    Conv1D, Activation, SpatialDropout1D, Add, Lambda
-)
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-class TemporalConvNet:
-    """时间卷积网络(TCN)实现"""
-    
-    def __init__(self, nb_filters=64, kernel_size=2, nb_stacks=1, dilations=None, 
-                 padding='causal', use_skip_connections=True, dropout_rate=0.0, 
-                 return_sequences=True, activation='relu', kernel_initializer='he_normal'):
-        self.nb_filters = nb_filters
-        self.kernel_size = kernel_size
-        self.nb_stacks = nb_stacks
-        self.dilations = dilations or [1, 2, 4, 8, 16, 32]
-        self.padding = padding
-        self.use_skip_connections = use_skip_connections
-        self.dropout_rate = dropout_rate
-        self.return_sequences = return_sequences
-        self.activation = activation
-        self.kernel_initializer = kernel_initializer
-    
-    def residual_block(self, x, dilation_rate, nb_filters, kernel_size, padding, dropout_rate):
-        """残差块"""
-        # 第一个卷积层
-        conv1 = Conv1D(filters=nb_filters, kernel_size=kernel_size,
-                      dilation_rate=dilation_rate, padding=padding,
-                      kernel_initializer=self.kernel_initializer)(x)
-        conv1 = BatchNormalization()(conv1)
-        conv1 = Activation(self.activation)(conv1)
-        conv1 = SpatialDropout1D(dropout_rate)(conv1)
-        
-        # 第二个卷积层
-        conv2 = Conv1D(filters=nb_filters, kernel_size=kernel_size,
-                      dilation_rate=dilation_rate, padding=padding,
-                      kernel_initializer=self.kernel_initializer)(conv1)
-        conv2 = BatchNormalization()(conv2)
-        conv2 = Activation(self.activation)(conv2)
-        conv2 = SpatialDropout1D(dropout_rate)(conv2)
-        
-        # 残差连接
-        if x.shape[-1] != nb_filters:
-            # 调整维度匹配
-            x = Conv1D(nb_filters, 1, padding='same')(x)
-        
-        res = Add()([x, conv2])
-        return Activation(self.activation)(res)
-    
-    def build_tcn(self, input_layer):
-        """构建TCN网络"""
-        x = input_layer
-        
-        for stack in range(self.nb_stacks):
-            for dilation in self.dilations:
-                x = self.residual_block(x, dilation, self.nb_filters, 
-                                      self.kernel_size, self.padding, self.dropout_rate)
-        
-        return x
+# 导入RTX 4090优化配置
+try:
+    from rtx4090_optimization import setup_rtx4090_optimization
+    setup_rtx4090_optimization()
+except ImportError:
+    # 如果没有优化模块，使用基本设置
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
 
-class LSTMTCNPredictor:
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"使用设备: {device}")
+
+class TemporalBlock(nn.Module):
+    """TCN的时间块"""
+    
+    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, padding, dropout=0.2):
+        super(TemporalBlock, self).__init__()
+        self.conv1 = nn.Conv1d(n_inputs, n_outputs, kernel_size,
+                              stride=stride, padding=padding, dilation=dilation)
+        self.chomp1 = Chomp1d(padding)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout)
+
+        self.conv2 = nn.Conv1d(n_outputs, n_outputs, kernel_size,
+                              stride=stride, padding=padding, dilation=dilation)
+        self.chomp2 = Chomp1d(padding)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.net = nn.Sequential(self.conv1, self.chomp1, self.relu1, self.dropout1,
+                                self.conv2, self.chomp2, self.relu2, self.dropout2)
+        self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
+        self.relu = nn.ReLU()
+        self.init_weights()
+
+    def init_weights(self):
+        self.conv1.weight.data.normal_(0, 0.01)
+        self.conv2.weight.data.normal_(0, 0.01)
+        if self.downsample is not None:
+            self.downsample.weight.data.normal_(0, 0.01)
+
+    def forward(self, x):
+        out = self.net(x)
+        res = x if self.downsample is None else self.downsample(x)
+        return self.relu(out + res)
+
+class Chomp1d(nn.Module):
+    """移除填充"""
+    def __init__(self, chomp_size):
+        super(Chomp1d, self).__init__()
+        self.chomp_size = chomp_size
+
+    def forward(self, x):
+        return x[:, :, :-self.chomp_size].contiguous()
+
+class TemporalConvNet(nn.Module):
+    """时间卷积网络(TCN)"""
+    
+    def __init__(self, num_inputs, num_channels, kernel_size=2, dropout=0.2):
+        super(TemporalConvNet, self).__init__()
+        layers = []
+        num_levels = len(num_channels)
+        for i in range(num_levels):
+            dilation_size = 2 ** i
+            in_channels = num_inputs if i == 0 else num_channels[i-1]
+            out_channels = num_channels[i]
+            layers += [TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
+                                   padding=(kernel_size-1) * dilation_size, dropout=dropout)]
+
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.network(x)
+
+class AttentionLayer(nn.Module):
+    """注意力机制层"""
+    
+    def __init__(self, hidden_size):
+        super(AttentionLayer, self).__init__()
+        self.attention = nn.Linear(hidden_size, 1)
+        
+    def forward(self, x):
+        # x shape: (batch_size, seq_len, hidden_size)
+        attention_weights = torch.softmax(self.attention(x), dim=1)
+        attended = torch.sum(x * attention_weights, dim=1)
+        return attended
+
+class StockDataset(Dataset):
+    """股票数据集"""
+    
+    def __init__(self, X, y_price, y_trend, y_volatility):
+        self.X = torch.FloatTensor(X)
+        self.y_price = torch.FloatTensor(y_price)
+        self.y_trend = torch.FloatTensor(y_trend)
+        self.y_volatility = torch.FloatTensor(y_volatility)
+        
+    def __len__(self):
+        return len(self.X)
+    
+    def __getitem__(self, idx):
+        return (self.X[idx], self.y_price[idx], self.y_trend[idx], self.y_volatility[idx])
+
+class LSTMTCNPredictor(nn.Module):
     """LSTM-TCN联合预测模型"""
     
     def __init__(self, sequence_length=60, n_features=5, 
-                 lstm_units=128, tcn_filters=64, 
+                 lstm_units=128, tcn_channels=[64, 64, 64], 
                  dense_units=64, dropout_rate=0.2):
-        """
-        初始化模型参数
+        super(LSTMTCNPredictor, self).__init__()
         
-        Args:
-            sequence_length: 输入序列长度
-            n_features: 特征数量
-            lstm_units: LSTM单元数
-            tcn_filters: TCN滤波器数量
-            dense_units: 全连接层单元数
-            dropout_rate: Dropout比率
-        """
         self.sequence_length = sequence_length
         self.n_features = n_features
         self.lstm_units = lstm_units
-        self.tcn_filters = tcn_filters
+        self.tcn_channels = tcn_channels
         self.dense_units = dense_units
         self.dropout_rate = dropout_rate
         
-        self.model = None
+        # LSTM分支
+        self.lstm = nn.LSTM(n_features, lstm_units, batch_first=True, dropout=dropout_rate)
+        self.lstm_bn = nn.BatchNorm1d(lstm_units)
+        
+        # TCN分支
+        self.tcn = TemporalConvNet(n_features, tcn_channels, dropout=dropout_rate)
+        
+        # 维度匹配层
+        self.lstm_proj = nn.Linear(lstm_units, tcn_channels[-1])
+        
+        # 注意力机制
+        self.attention = AttentionLayer(tcn_channels[-1])
+        
+        # 全连接层
+        self.fc1 = nn.Linear(tcn_channels[-1], dense_units)
+        self.bn1 = nn.BatchNorm1d(dense_units)
+        self.dropout1 = nn.Dropout(dropout_rate)
+        
+        self.fc2 = nn.Linear(dense_units, dense_units // 2)
+        self.bn2 = nn.BatchNorm1d(dense_units // 2)
+        self.dropout2 = nn.Dropout(dropout_rate / 2)
+        
+        # 输出层
+        self.price_head = nn.Linear(dense_units // 2, 1)
+        self.trend_head = nn.Linear(dense_units // 2, 3)
+        self.volatility_head = nn.Linear(dense_units // 2, 1)
+        
+        # 初始化权重
+        self.init_weights()
+        
+        # 数据缩放器
         self.scaler_X = StandardScaler()
         self.scaler_y = MinMaxScaler()
         self.history = None
         
-    def build_model(self):
-        """构建LSTM-TCN联合模型"""
-        # 输入层
-        inputs = Input(shape=(self.sequence_length, self.n_features))
+    def init_weights(self):
+        """初始化权重"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.LSTM):
+                for name, param in m.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
+    
+    def forward(self, x):
+        batch_size = x.size(0)
         
-        # LSTM分支 - 捕获长期依赖
-        lstm_out = LSTM(self.lstm_units, return_sequences=True, 
-                       dropout=self.dropout_rate, recurrent_dropout=self.dropout_rate)(inputs)
-        lstm_out = BatchNormalization()(lstm_out)
+        # LSTM分支
+        lstm_out, _ = self.lstm(x)  # (batch, seq, lstm_units)
+        lstm_out = self.lstm_bn(lstm_out.transpose(1, 2)).transpose(1, 2)
+        lstm_out = self.lstm_proj(lstm_out)  # 投影到TCN维度
         
-        # TCN分支 - 并行处理和局部特征提取
-        tcn = TemporalConvNet(nb_filters=self.tcn_filters, 
-                             kernel_size=3, 
-                             nb_stacks=2,
-                             dilations=[1, 2, 4, 8, 16],
-                             dropout_rate=self.dropout_rate)
-        tcn_out = tcn.build_tcn(inputs)
+        # TCN分支
+        x_tcn = x.transpose(1, 2)  # (batch, features, seq)
+        tcn_out = self.tcn(x_tcn)  # (batch, channels, seq)
+        tcn_out = tcn_out.transpose(1, 2)  # (batch, seq, channels)
         
-        # 特征融合
-        # 确保维度匹配
-        if lstm_out.shape[-1] != tcn_out.shape[-1]:
-            lstm_out = Dense(self.tcn_filters)(lstm_out)
-        
-        # 加权融合LSTM和TCN输出
-        alpha = 0.6  # LSTM权重
-        beta = 0.4   # TCN权重
-        
-        lstm_weighted = Lambda(lambda x: x * alpha)(lstm_out)
-        tcn_weighted = Lambda(lambda x: x * beta)(tcn_out)
-        
-        fused = Add()([lstm_weighted, tcn_weighted])
-        fused = BatchNormalization()(fused)
-        fused = Dropout(self.dropout_rate)(fused)
+        # 特征融合 (加权平均)
+        alpha, beta = 0.6, 0.4
+        fused = alpha * lstm_out + beta * tcn_out
         
         # 注意力机制
-        attention = Dense(1, activation='tanh')(fused)
-        attention = Activation('softmax')(attention)
-        attended = Lambda(lambda x: tf.reduce_sum(x[0] * x[1], axis=1))([fused, attention])
+        attended = self.attention(fused)  # (batch, channels)
         
         # 全连接层
-        dense1 = Dense(self.dense_units, activation='relu')(attended)
-        dense1 = BatchNormalization()(dense1)
-        dense1 = Dropout(self.dropout_rate)(dense1)
+        x = F.relu(self.fc1(attended))
+        x = self.bn1(x)
+        x = self.dropout1(x)
         
-        dense2 = Dense(self.dense_units // 2, activation='relu')(dense1)
-        dense2 = BatchNormalization()(dense2)
-        dense2 = Dropout(self.dropout_rate / 2)(dense2)
+        x = F.relu(self.fc2(x))
+        x = self.bn2(x)
+        x = self.dropout2(x)
         
-        # 输出层 - 多任务学习
-        # 价格预测
-        price_output = Dense(1, activation='linear', name='price')(dense2)
+        # 多任务输出
+        price_out = self.price_head(x)
+        trend_out = F.softmax(self.trend_head(x), dim=1)
+        volatility_out = torch.sigmoid(self.volatility_head(x))
         
-        # 趋势分类 (上涨/下跌/横盘)
-        trend_output = Dense(3, activation='softmax', name='trend')(dense2)
-        
-        # 波动率预测
-        volatility_output = Dense(1, activation='sigmoid', name='volatility')(dense2)
-        
-        # 构建模型
-        self.model = Model(inputs=inputs, 
-                          outputs=[price_output, trend_output, volatility_output])
-        
-        # 编译模型
-        self.model.compile(
-            optimizer=Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999),
-            loss={
-                'price': 'huber',  # 对异常值更鲁棒
-                'trend': 'categorical_crossentropy',
-                'volatility': 'mse'
-            },
-            loss_weights={
-                'price': 1.0,
-                'trend': 0.3,
-                'volatility': 0.2
-            },
-            metrics={
-                'price': ['mae', 'mse'],
-                'trend': ['accuracy'],
-                'volatility': ['mae']
-            }
-        )
-        
-        return self.model
+        return price_out, trend_out, volatility_out
     
     def prepare_features(self, data):
         """准备技术指标特征"""
@@ -283,63 +318,162 @@ class LSTMTCNPredictor:
         return (np.array(X), np.array(y_price), 
                 np.array(y_trend), np.array(y_volatility))
     
-    def train(self, data, validation_split=0.2, epochs=100, batch_size=32, 
-              early_stopping_patience=15, reduce_lr_patience=10):
-        """训练模型"""
+    def train_model(self, data, epochs=100, batch_size=32, 
+                   early_stopping_patience=15, learning_rate=0.001):
+        """训练模型，使用过去1年作为训练集，前一周作为验证集"""
         print("准备数据...")
         
         # 准备特征
         data_with_features = self.prepare_features(data)
         
-        # 创建序列
-        X, y_price, y_trend, y_volatility = self.create_sequences(data_with_features)
+        # 假设数据按日期排序
+        if 'date' not in data_with_features.columns:
+            raise ValueError("数据必须包含 'date' 列")
         
-        print(f"数据形状: X={X.shape}, y_price={y_price.shape}")
+        data_with_features = data_with_features.sort_values('date')
         
-        # 数据标准化
-        X_scaled = self.scaler_X.fit_transform(X.reshape(-1, X.shape[-1])).reshape(X.shape)
-        y_price_scaled = self.scaler_y.fit_transform(y_price.reshape(-1, 1)).flatten()
+        # 计算分割点
+        max_date = data_with_features['date'].max()
+        val_start = max_date - timedelta(days=6)  # 前一周（7天）
+        train_start = max_date - timedelta(days=365 + 6)  # 过去1年 + 前一周
         
-        # 构建模型
-        if self.model is None:
-            self.n_features = X.shape[-1]
-            self.build_model()
-        
-        print("模型结构:")
-        self.model.summary()
-        
-        # 回调函数
-        callbacks = [
-            EarlyStopping(monitor='val_loss', patience=early_stopping_patience, 
-                         restore_best_weights=True, verbose=1),
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=reduce_lr_patience, 
-                             min_lr=1e-7, verbose=1),
-            ModelCheckpoint('best_lstm_tcn_model.h5', monitor='val_loss', 
-                           save_best_only=True, verbose=1)
+        # 筛选数据
+        train_data = data_with_features[
+            (data_with_features['date'] >= train_start) & 
+            (data_with_features['date'] < val_start)
         ]
+        val_data = data_with_features[data_with_features['date'] >= val_start]
         
-        # 训练模型
+        if len(train_data) < self.sequence_length:
+            raise ValueError("训练数据不足")
+        if len(val_data) < 1:
+            raise ValueError("验证数据不足")
+        
+        print(f"训练数据: {len(train_data)} 天 ({train_data['date'].min()} 到 {train_data['date'].max()})")
+        print(f"验证数据: {len(val_data)} 天 ({val_data['date'].min()} 到 {val_data['date'].max()})")
+        
+        # 创建序列
+        X_train, y_price_train, y_trend_train, y_vol_train = self.create_sequences(train_data)
+        X_val, y_price_val, y_trend_val, y_vol_val = self.create_sequences(val_data)
+        
+        print(f"训练形状: X={X_train.shape}, y_price={y_price_train.shape}")
+        print(f"验证形状: X={X_val.shape}, y_price={y_price_val.shape}")
+        
+        # 数据标准化（仅用训练数据拟合缩放器）
+        X_train_scaled = self.scaler_X.fit_transform(X_train.reshape(-1, X_train.shape[-1])).reshape(X_train.shape)
+        y_price_train_scaled = self.scaler_y.fit_transform(y_price_train.reshape(-1, 1)).flatten()
+        
+        X_val_scaled = self.scaler_X.transform(X_val.reshape(-1, X_val.shape[-1])).reshape(X_val.shape)
+        y_price_val_scaled = self.scaler_y.transform(y_price_val.reshape(-1, 1)).flatten()
+        
+        # 更新特征数量
+        self.n_features = X_train.shape[-1]
+        
+        # 创建数据集和数据加载器
+        train_dataset = StockDataset(X_train_scaled, y_price_train_scaled, y_trend_train, y_vol_train)
+        val_dataset = StockDataset(X_val_scaled, y_price_val_scaled, y_trend_val, y_vol_val)
+        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        
+        # 移动模型到设备
+        self.to(device)
+        
+        # 优化器和损失函数
+        optimizer = optim.Adam(self.parameters(), lr=learning_rate, betas=(0.9, 0.999))
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, 
+                                                        patience=10, min_lr=1e-7, verbose=True)
+        
+        # 损失函数
+        price_criterion = nn.HuberLoss()
+        trend_criterion = nn.CrossEntropyLoss()
+        volatility_criterion = nn.MSELoss()
+        
+        # 训练历史
+        train_losses = []
+        val_losses = []
+        best_val_loss = float('inf')
+        patience_counter = 0
+        
         print("开始训练...")
-        self.history = self.model.fit(
-            X_scaled,
-            {
-                'price': y_price_scaled,
-                'trend': y_trend,
-                'volatility': y_volatility
-            },
-            validation_split=validation_split,
-            epochs=epochs,
-            batch_size=batch_size,
-            callbacks=callbacks,
-            verbose=1
-        )
+        for epoch in range(epochs):
+            # 训练阶段
+            self.train()
+            train_loss = 0.0
+            for batch_X, batch_y_price, batch_y_trend, batch_y_vol in train_loader:
+                batch_X = batch_X.to(device)
+                batch_y_price = batch_y_price.to(device)
+                batch_y_trend = batch_y_trend.to(device)
+                batch_y_vol = batch_y_vol.to(device)
+                
+                optimizer.zero_grad()
+                
+                price_pred, trend_pred, vol_pred = self(batch_X)
+                
+                # 计算损失
+                price_loss = price_criterion(price_pred.squeeze(), batch_y_price)
+                trend_loss = trend_criterion(trend_pred, batch_y_trend.argmax(dim=1))
+                vol_loss = volatility_criterion(vol_pred.squeeze(), batch_y_vol)
+                
+                # 加权总损失
+                total_loss = price_loss + 0.3 * trend_loss + 0.2 * vol_loss
+                
+                total_loss.backward()
+                optimizer.step()
+                
+                train_loss += total_loss.item()
+            
+            # 验证阶段
+            self.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for batch_X, batch_y_price, batch_y_trend, batch_y_vol in val_loader:
+                    batch_X = batch_X.to(device)
+                    batch_y_price = batch_y_price.to(device)
+                    batch_y_trend = batch_y_trend.to(device)
+                    batch_y_vol = batch_y_vol.to(device)
+                    
+                    price_pred, trend_pred, vol_pred = self(batch_X)
+                    
+                    price_loss = price_criterion(price_pred.squeeze(), batch_y_price)
+                    trend_loss = trend_criterion(trend_pred, batch_y_trend.argmax(dim=1))
+                    vol_loss = volatility_criterion(vol_pred.squeeze(), batch_y_vol)
+                    
+                    total_loss = price_loss + 0.3 * trend_loss + 0.2 * vol_loss
+                    val_loss += total_loss.item()
+            
+            train_loss /= len(train_loader)
+            val_loss /= len(val_loader)
+            
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+            
+            print(f'Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}')
+            
+            # 学习率调度
+            scheduler.step(val_loss)
+            
+            # 早停
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                # 保存最佳模型
+                torch.save(self.state_dict(), 'best_lstm_tcn_model.pth')
+            else:
+                patience_counter += 1
+                if patience_counter >= early_stopping_patience:
+                    print(f"早停在第 {epoch+1} 轮")
+                    break
         
+        # 加载最佳模型
+        self.load_state_dict(torch.load('best_lstm_tcn_model.pth'))
+        
+        self.history = {'train_loss': train_losses, 'val_loss': val_losses}
         return self.history
     
-    def predict(self, data, return_confidence=True):
+    def predict_stock(self, data, return_confidence=True):
         """预测"""
-        if self.model is None:
-            raise ValueError("模型尚未训练，请先调用train()方法")
+        self.eval()
         
         # 准备特征
         data_with_features = self.prepare_features(data)
@@ -362,10 +496,16 @@ class LSTMTCNPredictor:
         
         # 标准化
         X_scaled = self.scaler_X.transform(X.reshape(-1, X.shape[-1])).reshape(X.shape)
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
         
         # 预测
-        predictions = self.model.predict(X_scaled, verbose=0)
-        price_pred, trend_pred, volatility_pred = predictions
+        with torch.no_grad():
+            price_pred, trend_pred, volatility_pred = self(X_tensor)
+        
+        # 转换回CPU并获取数值
+        price_pred = price_pred.cpu().numpy()
+        trend_pred = trend_pred.cpu().numpy()
+        volatility_pred = volatility_pred.cpu().numpy()
         
         # 反标准化价格预测
         price_pred_original = self.scaler_y.inverse_transform(price_pred.reshape(-1, 1))[0, 0]
@@ -412,8 +552,10 @@ class LSTMTCNPredictor:
         else:
             return "低风险"
     
-    def evaluate(self, data):
+    def evaluate_model(self, data):
         """评估模型性能"""
+        self.eval()
+        
         # 准备数据
         data_with_features = self.prepare_features(data)
         X, y_price, y_trend, y_volatility = self.create_sequences(data_with_features)
@@ -423,8 +565,14 @@ class LSTMTCNPredictor:
         y_price_scaled = self.scaler_y.transform(y_price.reshape(-1, 1)).flatten()
         
         # 预测
-        predictions = self.model.predict(X_scaled, verbose=0)
-        price_pred, trend_pred, volatility_pred = predictions
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        with torch.no_grad():
+            price_pred, trend_pred, volatility_pred = self(X_tensor)
+        
+        # 转换回CPU
+        price_pred = price_pred.cpu().numpy()
+        trend_pred = trend_pred.cpu().numpy()
+        volatility_pred = volatility_pred.cpu().numpy()
         
         # 反标准化价格预测
         price_pred_original = self.scaler_y.inverse_transform(price_pred.reshape(-1, 1)).flatten()
@@ -448,18 +596,32 @@ class LSTMTCNPredictor:
             'r2_score': float(r2),
             'mape': float(mape),
             'trend_accuracy': float(trend_accuracy),
-            'volatility_mae': float(mean_absolute_error(y_volatility, volatility_pred))
+            'volatility_mae': float(mean_absolute_error(y_volatility, volatility_pred.flatten()))
         }
     
     def save_model(self, filepath):
         """保存模型"""
-        if self.model is not None:
-            self.model.save(filepath)
-            print(f"模型已保存到: {filepath}")
+        torch.save({
+            'model_state_dict': self.state_dict(),
+            'scaler_X': self.scaler_X,
+            'scaler_y': self.scaler_y,
+            'model_params': {
+                'sequence_length': self.sequence_length,
+                'n_features': self.n_features,
+                'lstm_units': self.lstm_units,
+                'tcn_channels': self.tcn_channels,
+                'dense_units': self.dense_units,
+                'dropout_rate': self.dropout_rate
+            }
+        }, filepath)
+        print(f"模型已保存到: {filepath}")
     
     def load_model(self, filepath):
         """加载模型"""
-        self.model = tf.keras.models.load_model(filepath)
+        checkpoint = torch.load(filepath, map_location=device)
+        self.load_state_dict(checkpoint['model_state_dict'])
+        self.scaler_X = checkpoint['scaler_X']
+        self.scaler_y = checkpoint['scaler_y']
         print(f"模型已从 {filepath} 加载")
 
 def get_sample_data():
@@ -494,7 +656,7 @@ def get_sample_data():
 
 if __name__ == "__main__":
     # 示例使用
-    print("LSTM-TCN联合股票预测模型")
+    print("LSTM-TCN联合股票预测模型 (PyTorch版本)")
     print("=" * 50)
     
     # 生成示例数据
@@ -506,30 +668,30 @@ if __name__ == "__main__":
     model = LSTMTCNPredictor(
         sequence_length=60,
         lstm_units=128,
-        tcn_filters=64,
+        tcn_channels=[64, 64, 64],
         dense_units=64,
         dropout_rate=0.2
     )
     
     # 训练模型
     print("训练模型...")
-    history = model.train(sample_data, epochs=50, batch_size=32)
+    history = model.train_model(sample_data, epochs=50, batch_size=32)
     
     # 评估模型
     print("评估模型...")
-    metrics = model.evaluate(sample_data)
+    metrics = model.evaluate_model(sample_data)
     print("模型性能指标:")
     for key, value in metrics.items():
         print(f"  {key}: {value:.4f}")
     
     # 预测
     print("进行预测...")
-    prediction = model.predict(sample_data)
+    prediction = model.predict_stock(sample_data)
     print("预测结果:")
     for key, value in prediction.items():
         print(f"  {key}: {value}")
     
     # 保存模型
-    model.save_model('lstm_tcn_stock_model.h5')
+    model.save_model('lstm_tcn_stock_model.pth')
     
     print("\n模型训练和测试完成！")
