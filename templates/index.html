@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中国股票实时数据</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Arial', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .controls {
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            margin: 5px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.4);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .status {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 18px;
+            color: #666;
+        }
+        
+        .stock-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 30px;
+        }
+        
+        .stock-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+            border-left: 4px solid #3498db;
+        }
+        
+        .stock-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+        }
+        
+        .stock-card.positive {
+            border-left-color: #e74c3c;
+        }
+        
+        .stock-card.negative {
+            border-left-color: #27ae60;
+        }
+        
+        .stock-code {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .stock-price {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .positive .stock-price {
+            color: #e74c3c;
+        }
+        
+        .negative .stock-price {
+            color: #27ae60;
+        }
+        
+        .stock-change {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        
+        .positive .stock-change {
+            color: #e74c3c;
+        }
+        
+        .negative .stock-change {
+            color: #27ae60;
+        }
+        
+        .stock-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .detail-item {
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .footer {
+            background: #2c3e50;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            font-size: 14px;
+        }
+        
+        @media (max-width: 768px) {
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .stock-grid {
+                grid-template-columns: 1fr;
+                padding: 20px;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏛️ 中国股票实时数据</h1>
+            <p>实时获取A股市场行情数据</p>
+        </div>
+        
+        <div class="controls">
+            <div>
+                <button class="btn" onclick="refreshData()">🔄 刷新数据</button>
+                <button class="btn" onclick="toggleAutoRefresh()">⏰ 自动刷新</button>
+            </div>
+            <div class="status">
+                <span id="lastUpdate">正在加载...</span>
+                <span id="stockCount"></span>
+            </div>
+        </div>
+        
+        <div id="loading" class="loading">
+            📊 正在加载股票数据，请稍候...
+        </div>
+        
+        <div id="stockContainer" class="stock-grid" style="display: none;">
+        </div>
+        
+        <div class="footer">
+            <p>数据来源于公开接口，仅供参考，不构成投资建议 | 更新时间：<span id="updateTime"></span></p>
+        </div>
+    </div>
+
+    <script>
+        let autoRefreshInterval = null;
+        let isAutoRefresh = false;
+        
+        // 页面加载时获取数据
+        window.onload = function() {
+            loadStockData();
+        };
+        
+        // 加载股票数据
+        async function loadStockData() {
+            try {
+                const response = await fetch('/api/stocks');
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayStockData(result.data);
+                    updateStatus(result.last_update, result.count);
+                } else {
+                    showError('获取数据失败');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showError('网络错误，请检查连接');
+            }
+        }
+        
+        // 显示股票数据
+        function displayStockData(stocks) {
+            const container = document.getElementById('stockContainer');
+            const loading = document.getElementById('loading');
+            
+            if (!stocks || stocks.length === 0) {
+                container.innerHTML = '<div class="loading">暂无股票数据</div>';
+                loading.style.display = 'none';
+                container.style.display = 'block';
+                return;
+            }
+            
+            let html = '';
+            stocks.forEach(stock => {
+                const changeClass = stock.change >= 0 ? 'positive' : 'negative';
+                const changeSymbol = stock.change >= 0 ? '+' : '';
+                
+                html += `
+                    <div class="stock-card ${changeClass}">
+                        <div class="stock-code">${stock.stock_code}</div>
+                        <div class="stock-price">¥${stock.close.toFixed(2)}</div>
+                        <div class="stock-change">
+                            ${changeSymbol}${stock.change.toFixed(2)} (${changeSymbol}${stock.change_pct.toFixed(2)}%)
+                        </div>
+                        <div class="stock-details">
+                            <div class="detail-item">
+                                <span>开盘:</span>
+                                <span>¥${stock.open.toFixed(2)}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span>最高:</span>
+                                <span>¥${stock.high.toFixed(2)}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span>最低:</span>
+                                <span>¥${stock.low.toFixed(2)}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span>成交量:</span>
+                                <span>${formatVolume(stock.volume)}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            loading.style.display = 'none';
+            container.style.display = 'grid';
+        }
+        
+        // 格式化成交量
+        function formatVolume(volume) {
+            if (volume >= 100000000) {
+                return (volume / 100000000).toFixed(2) + '亿';
+            } else if (volume >= 10000) {
+                return (volume / 10000).toFixed(2) + '万';
+            } else {
+                return volume.toString();
+            }
+        }
+        
+        // 更新状态信息
+        function updateStatus(lastUpdate, count) {
+            document.getElementById('lastUpdate').textContent = 
+                lastUpdate ? `最后更新: ${lastUpdate}` : '未更新';
+            document.getElementById('stockCount').textContent = 
+                count ? ` | 股票数量: ${count}` : '';
+            document.getElementById('updateTime').textContent = 
+                new Date().toLocaleString();
+        }
+        
+        // 显示错误信息
+        function showError(message) {
+            const container = document.getElementById('stockContainer');
+            const loading = document.getElementById('loading');
+            
+            container.innerHTML = `<div class="loading">❌ ${message}</div>`;
+            loading.style.display = 'none';
+            container.style.display = 'block';
+        }
+        
+        // 刷新数据
+        async function refreshData() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('stockContainer').style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/refresh');
+                const result = await response.json();
+                
+                if (result.success) {
+                    await loadStockData();
+                } else {
+                    showError(result.message || '刷新失败');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showError('刷新失败，请重试');
+            }
+        }
+        
+        // 切换自动刷新
+        function toggleAutoRefresh() {
+            if (isAutoRefresh) {
+                clearInterval(autoRefreshInterval);
+                isAutoRefresh = false;
+                document.querySelector('button[onclick="toggleAutoRefresh()"]').textContent = '⏰ 自动刷新';
+            } else {
+                autoRefreshInterval = setInterval(loadStockData, 60000); // 每分钟刷新
+                isAutoRefresh = true;
+                document.querySelector('button[onclick="toggleAutoRefresh()"]').textContent = '⏹️ 停止自动刷新';
+            }
+        }
+    </script>
+</body>
+</html>
