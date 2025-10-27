@@ -64,11 +64,20 @@ source trading_env/bin/activate
 
 ### 步骤3: 安装依赖
 ```bash
-# 基础依赖安装
+# 先安装基础依赖（不包含PyTorch）
 pip install -r requirements.txt
 
-# GPU用户额外安装CUDA版PyTorch
+# 单独安装PyTorch（推荐使用官方源或清华源）
+# 方法1: 使用官方源（推荐）
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# 方法2: 使用清华源（国内用户推荐）
+pip install torch torchvision torchaudio -i https://pypi.tuna.tsinghua.edu.cn/simple/
+
+# 方法3: 如果网络较慢，可以分别安装
+pip install torch==2.1.0 -i https://pypi.tuna.tsinghua.edu.cn/simple/
+pip install torchvision==0.16.0 -i https://pypi.tuna.tsinghua.edu.cn/simple/
+pip install torchaudio==2.1.0 -i https://pypi.tuna.tsinghua.edu.cn/simple/
 ```
 
 ### 步骤4: 验证安装
@@ -176,7 +185,27 @@ python run_trading_analysis.py
 
 ## 🚨 常见问题解决
 
-### 问题1: CUDA版本不匹配
+### 问题1: PyTorch下载速度慢
+```bash
+# 症状: 从阿里云镜像下载PyTorch速度很慢
+# 解决方案:
+
+# 方法1: 使用清华源（国内推荐）
+pip install torch torchvision torchaudio -i https://pypi.tuna.tsinghua.edu.cn/simple/
+
+# 方法2: 使用中科大源
+pip install torch torchvision torchaudio -i https://pypi.mirrors.ustc.edu.cn/simple/
+
+# 方法3: 直接从官方下载（海外服务器）
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# 方法4: 手动下载安装（最稳定）
+# 1. 访问 https://pytorch.org/get-started/locally/
+# 2. 选择对应版本下载whl文件
+# 3. pip install 下载的whl文件
+```
+
+### 问题2: CUDA版本不匹配
 ```bash
 # 症状: RuntimeError: CUDA version mismatch
 # 解决: 重新安装匹配的PyTorch版本
@@ -184,21 +213,21 @@ pip uninstall torch torchvision torchaudio
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### 问题2: 内存不足
+### 问题3: 内存不足
 ```bash
 # 症状: CUDA out of memory
 # 解决: 减少批处理大小
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
 ```
 
-### 问题3: 网络连接失败
+### 问题4: 网络连接失败
 ```bash
 # 症状: 无法获取股票数据
 # 解决: 检查网络连接和防火墙设置
 ping finance.yahoo.com
 ```
 
-### 问题4: 依赖包冲突
+### 问题5: 依赖包冲突
 ```bash
 # 症状: 包版本冲突
 # 解决: 使用虚拟环境重新安装
@@ -208,7 +237,7 @@ source trading_env/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
-### 问题5: 权限问题
+### 问题6: 权限问题
 ```bash
 # 症状: Permission denied
 # 解决: 检查文件权限
