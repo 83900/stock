@@ -1,283 +1,193 @@
-# LSTM-TCN股票预测系统
+# 智能股票交易分析系统
 
-一个基于PyTorch深度学习的高精度股票预测系统，结合实时数据获取和LSTM-TCN联合模型，专为短线交易设计。
+基于RTX 4090深度学习的股票短期交易策略系统，专门分析50支科技股票，寻找1-2天的盈利机会。
 
-## 🌟 主要特性
+## 🎯 核心功能
 
-### 数据获取
-- **实时数据获取**: 使用免费开源的adata库获取中国股市实时数据
-- **多数据源支持**: 集成多个数据源，确保数据的可靠性和准确性
-- **技术指标计算**: 自动计算RSI、MACD、布林带等技术指标
-
-### 预测模型
-- **LSTM-TCN联合架构**: 结合长短期记忆网络和时间卷积网络的优势
-- **PyTorch实现**: 使用PyTorch框架构建，支持GPU加速
-- **多任务学习**: 同时预测价格、趋势和波动率
-- **注意力机制**: 提升模型对关键时间点的关注
-- **高精度预测**: MAPE通常在1-3%之间，趋势准确率>80%
-
-### 应用功能
-- **智能预测**: 提供价格预测、趋势判断和风险评估
-- **批量分析**: 支持多股票并行预测和排序推荐
-- **Web可视化界面**: 提供直观的实时数据展示和预测结果
-- **风险控制**: 提供置信度评估和风险等级分类
-
-## 数据来源
-
-本系统使用 `adata` 库获取股票数据，该库提供：
-- 免费开源的A股量化交易数据
-- 多数据源融合，保障数据高可用性
-- 实时行情数据（有一定延迟）
+- 🔥 **真实数据获取**: 从Yahoo Finance和腾讯财经API获取50支A股科技股票数据
+- 🤖 **AI预测模型**: 使用改进的LSTM+注意力机制预测1-2天价格走势
+- 📊 **低价机会识别**: 基于RSI、MACD、布林带等技术指标筛选低估值股票
+- 💰 **交易成本计算**: 精确计算印花税、佣金、过户费等所有交易成本
+- 🎯 **最优策略推荐**: 智能推荐买入卖出价格，追求最佳盈利
+- 🚀 **GPU加速**: 专为RTX 4090优化，大幅提升计算速度
 
 ## 🚀 快速开始
 
-### 方法1: 使用快速启动脚本 (推荐)
+### 1. 环境准备
+
 ```bash
-# 完整演示 (包括环境检查、数据获取、模型训练、预测)
-python quick_start.py --mode full --stock 000001 --epochs 20
-
-# 仅检查环境
-python quick_start.py --mode check
-
-# 仅演示数据获取
-python quick_start.py --mode data
-
-# 仅训练模型
-python quick_start.py --mode train --stock 000001 --epochs 50
-
-# 仅进行预测
-python quick_start.py --mode predict --stock 000001 --model your_model.pth
-```
-
-### 方法2: 分步操作
-
-#### 1. 环境准备
-```bash
-# 安装依赖 (包含PyTorch CPU版本)
+# 安装基础依赖
 pip install -r requirements.txt
 
-# 如需GPU加速，请根据CUDA版本安装对应的PyTorch
-# CUDA 11.8: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-# CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 如果使用RTX 4090，安装CUDA版本PyTorch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-#### 2. 数据获取测试
+### 2. 快速分析
+
 ```bash
-# 获取实时股票数据
-python stock_data.py
+# 运行快速分析（推荐首次使用）
+python run_trading_analysis.py
+# 选择选项 1 - 快速分析模式
 ```
 
-#### 3. 模型训练
-```python
-from advanced_predictor import AdvancedStockPredictor
+### 3. 完整分析
 
-# 创建预测器并训练模型
-predictor = AdvancedStockPredictor()
-result = predictor.train_model(
-    stock_code="000001",  # 平安银行
-    days=500,            # 使用500天历史数据
-    epochs=100,          # 训练100轮
-    save_model=True      # 保存模型
-)
-```
-
-#### 4. 股票预测
-```python
-# 预测股票价格和趋势
-prediction = predictor.predict_stock("000001")
-print(f"预测价格: {prediction['prediction']['predicted_price']:.2f}")
-print(f"趋势预测: {prediction['prediction']['trend_prediction']}")
-print(f"建议操作: {prediction['analysis']['trading_action']}")
-```
-
-#### 5. Web界面
 ```bash
-# 启动Web服务
-python web_app.py
-
-# 访问 http://localhost:8080
+# 运行完整分析（分析所有50支股票）
+python smart_trading_analyzer.py
 ```
 
-## 📊 系统架构
+## 📊 分析流程
 
+### 1. **数据获取阶段**
+- 获取50支科技股票近2年历史数据
+- 包含OHLCV数据和技术指标计算
+- 数据质量检查和清洗
+
+### 2. **机会识别阶段**
+- RSI超卖信号（RSI < 30）
+- 价格接近布林带下轨
+- MACD金叉信号
+- 价格处于历史低位
+- 成交量异常放大
+- 短期均线支撑
+
+### 3. **AI预测阶段**
+- 双向LSTM网络捕获时序特征
+- 多头注意力机制关注关键信息
+- 批标准化加速收敛
+- Dropout防止过拟合
+- 预测1天和2天后的价格
+
+### 4. **策略优化阶段**
+- 计算所有交易成本
+- 评估不同持仓期收益
+- 推荐最优买卖价格
+- 风险收益比分析
+
+## 💼 交易成本计算
+
+系统精确计算A股所有交易费用：
+
+- **印花税**: 0.1%（仅卖出收取）
+- **佣金**: 0.03%（买卖双向，最低5元）
+- **过户费**: 0.002%（买卖双向）
+
+## 📈 分析的50支科技股票
+
+### 软件开发
+- 用友网络(600588)、广联达(002410)、同花顺(300033)
+- 四维图新(002405)、中科创达(300496)、卫宁健康(300253)
+- 深信服(300454)、**科大讯飞(002230)**
+
+### 电子设备
+- 海康威视(002415)、京东方A(000725)、歌尔股份(002241)
+- 中兴通讯(000063)、大华股份(002236)、信维通信(300136)
+
+### 半导体芯片
+- 北方华创(002371)、圣邦股份(300661)、北京君正(300223)
+- 景嘉微(300474)、全志科技(300458)、华天科技(002185)
+
+### 人工智能
+- 东方财富(300059)、网宿科技(300017)、万达信息(300168)
+- 美亚柏科(300188)、天玑科技(300245)、华宇软件(300271)
+
+*...等共50支优质科技股票*
+
+## 🎮 GPU优化特性
+
+专为RTX 4090优化：
+- **混合精度训练**: 提升训练速度50%+
+- **动态批处理**: 最大化GPU利用率
+- **梯度累积**: 支持大批量训练
+- **内存优化**: 高效利用24GB显存
+
+## 📋 使用示例
+
+### 快速分析模式
+```bash
+python run_trading_analysis.py
+# 选择 1 - 快速分析
+# 约5-10分钟完成前10支股票分析
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   数据获取层     │    │    预测模型层     │    │   应用服务层     │
-│                │    │                 │    │                │
-│ • 实时股价      │───▶│ • LSTM网络      │───▶│ • Web API      │
-│ • 技术指标      │    │ • TCN网络       │    │ • 批量预测      │
-│ • 成交量数据    │    │ • 注意力机制     │    │ • 风险评估      │
-│ • 历史数据      │    │ • 多任务学习     │    │ • 投资建议      │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
+
+### 完整分析模式
+```bash
+python smart_trading_analyzer.py
+# 分析所有50支股票
+# 约30-60分钟完成（取决于GPU性能）
 ```
 
-## 🎯 核心文件说明
+### 单只股票分析
+```bash
+python get_kedaxunfei_data.py
+# 专门分析科大讯飞
+```
 
-### 数据获取模块
-- `stock_data.py` - 实时股票数据获取
-- `web_app.py` - Web界面和API服务
+## 📊 输出报告
 
-### 预测模型模块
-- `lstm_tcn_model.py` - LSTM-TCN联合模型核心实现 (PyTorch)
-- `advanced_predictor.py` - 高级预测器，集成数据获取和模型预测
-- `prediction_models.py` - 多种预测模型对比 (LSTM, XGBoost, Random Forest等，PyTorch实现)
-- `test_prediction_models.py` - 模型性能测试脚本
+系统会生成详细的分析报告：
 
-### 工具和配置
-- `quick_start.py` - 快速启动和演示脚本
-- `requirements.txt` - 项目依赖 (包含PyTorch CPU版本)
-- `DEPLOYMENT_GUIDE.md` - 详细部署指南
+### 文本报告
+- 总体投资统计
+- 按利润率排序的推荐
+- 详细买卖建议
+- 风险提示
 
-## 💡 使用场景
+### 数据文件
+- JSON格式的详细分析数据
+- 包含预测价格、技术指标、交易策略等
 
-### 1. 短线交易策略
-- 日内交易信号生成
-- 1-3天持仓期预测
-- 买卖点时机判断
+## ⚠️ 重要提示
 
-### 2. 风险管理
-- 波动率预测
-- 置信度评估
-- 风险等级分类
+### 风险警告
+1. **本系统仅用于学习和研究目的**
+2. **股票投资有风险，预测结果仅供参考**
+3. **不构成投资建议，请谨慎决策**
+4. **实际交易中可能存在滑点和流动性风险**
 
-### 3. 投资组合优化
-- 多股票批量分析
-- 收益风险排序
-- 资产配置建议
+### 使用建议
+1. **分散投资**: 不要将所有资金投入单只股票
+2. **控制仓位**: 建议单只股票仓位不超过总资金的10%
+3. **设置止损**: 建议设置3-5%的止损线
+4. **关注市场**: 结合大盘走势和政策面分析
 
-## 🔧 算力平台部署
+## 🔧 系统要求
 
-### 推荐配置
-- **GPU**: NVIDIA RTX 4090 / A100 / V100 (支持CUDA 11.8+)
-- **显存**: ≥ 16GB VRAM  
-- **内存**: ≥ 32GB RAM
-- **算力平台**: AutoDL (性价比) / 阿里云PAI / 腾讯云TI-ONE
+### 硬件要求
+- **GPU**: NVIDIA RTX 4090 (推荐) / RTX 3080以上
+- **显存**: ≥ 12GB VRAM
+- **内存**: ≥ 16GB RAM
+- **存储**: ≥ 5GB 可用空间
 
-### 部署步骤
-1. 上传代码到算力平台
-2. 安装基础依赖: `pip install -r requirements.txt`
-3. 安装GPU版本PyTorch: `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`
-4. 运行快速测试: `python quick_start.py --mode check`
-5. 训练模型: `python quick_start.py --mode train --epochs 100`
-6. 开始预测: `python quick_start.py --mode predict`
+### 软件要求
+- Python 3.8+
+- PyTorch 2.0+
+- CUDA 11.8+
+- 稳定的网络连接
 
-详细部署指南请参考: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
-
-## 项目结构
+## 📁 项目结构
 
 ```
 stock/
-├── stock_data.py      # 核心数据获取模块
-├── web_app.py         # Web应用程序
-├── requirements.txt   # 依赖包列表
-├── README.md         # 项目说明
-└── templates/        # Web模板文件（自动生成）
-    └── index.html
+├── smart_trading_analyzer.py    # 主分析器
+├── run_trading_analysis.py      # 快速启动脚本
+├── real_stock_data_fetcher.py   # 数据获取器
+├── get_kedaxunfei_data.py       # 科大讯飞专用分析
+├── improved_gpu_train.py        # GPU优化训练
+├── requirements.txt             # 依赖包列表
+└── README.md                   # 项目说明
 ```
 
-## 主要模块说明
+## 🤝 技术支持
 
-### StockDataFetcher 类
+如遇到问题，请检查：
+1. GPU驱动是否最新
+2. CUDA版本是否匹配
+3. 网络连接是否稳定
+4. 依赖包是否完整安装
 
-核心数据获取器，提供以下方法：
+## 📄 许可证
 
-- `get_all_stock_codes()`: 获取所有股票代码
-- `get_stock_realtime_data(stock_code)`: 获取单只股票实时数据
-- `get_multiple_stocks_data()`: 批量获取多只股票数据
-- `save_data_to_json()`: 保存数据为JSON格式
-- `save_data_to_csv()`: 保存数据为CSV格式
-- `display_data()`: 在终端显示数据
-
-### 数据字段说明
-
-每只股票返回的数据包含：
-
-```json
-{
-  "stock_code": "000001",      // 股票代码
-  "trade_date": "2024-01-15",  // 交易日期
-  "open": 12.50,               // 开盘价
-  "close": 12.80,              // 收盘价
-  "high": 12.90,               // 最高价
-  "low": 12.40,                // 最低价
-  "volume": 1234567,           // 成交量
-  "change": 0.30,              // 涨跌额
-  "change_pct": 2.40,          // 涨跌幅(%)
-  "update_time": "2024-01-15 15:30:00"  // 更新时间
-}
-```
-
-## API接口
-
-Web应用提供以下API接口：
-
-- `GET /api/stocks` - 获取所有股票数据
-- `GET /api/stock/<stock_code>` - 获取单只股票数据
-- `GET /api/refresh` - 手动刷新数据
-
-## 注意事项
-
-1. **数据延迟**: 数据来源于公开接口，存在一定延迟，仅供参考
-2. **请求频率**: 为避免被限制，系统在批量获取时会添加延时
-3. **投资风险**: 本系统仅用于学习和研究，不构成投资建议
-4. **网络依赖**: 需要稳定的网络连接来获取数据
-
-## 自定义配置
-
-### 修改股票列表
-
-编辑 `stock_data.py` 中的 `load_popular_stocks()` 方法：
-
-```python
-def load_popular_stocks(self):
-    popular_stocks = [
-        '000001',  # 平安银行
-        '600519',  # 贵州茅台
-        # 添加更多股票代码...
-    ]
-    self.stock_codes = popular_stocks
-```
-
-### 修改更新频率
-
-编辑 `web_app.py` 中的更新间隔：
-
-```python
-# 修改这行来改变后台更新频率（秒）
-time.sleep(300)  # 300秒 = 5分钟
-```
-
-## 故障排除
-
-### 常见问题
-
-1. **安装依赖失败**
-   ```bash
-   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple/
-   ```
-
-2. **获取数据失败**
-   - 检查网络连接
-   - 确认股票代码格式正确
-   - 查看控制台错误信息
-
-3. **Web界面无法访问**
-   - 确认端口5000未被占用
-   - 检查防火墙设置
-   - 尝试使用 `127.0.0.1:5000` 访问
-
-## 开发计划
-
-- [ ] 添加更多技术指标计算
-- [ ] 支持股票搜索功能
-- [ ] 添加数据可视化图表
-- [ ] 支持历史数据查询
-- [ ] 添加价格预警功能
-
-## 许可证
-
-本项目仅供学习和研究使用，请遵守相关法律法规和数据提供方的使用条款。
-
-## 贡献
-
-欢迎提交Issue和Pull Request来改进这个项目！
+MIT License - 仅供学习研究使用
