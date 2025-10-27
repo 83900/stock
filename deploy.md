@@ -10,12 +10,14 @@
 - [ ] **内存**: ≥ 16GB RAM  
 - [ ] **存储**: ≥ 5GB 可用空间
 - [ ] **网络**: 稳定的互联网连接
+- [ ] **代理工具**: 可选，用于访问Yahoo Finance
 
 #### 软件要求
 - [ ] **操作系统**: Windows 10/11, macOS 10.15+, Ubuntu 18.04+
 - [ ] **Python**: 3.8 - 3.11 (推荐 3.10)
 - [ ] **CUDA**: 11.8+ (如使用GPU)
 - [ ] **Git**: 最新版本
+- [ ] **Tushare账号**: 推荐注册获取免费token
 
 ### 📦 环境准备
 
@@ -123,10 +125,49 @@ export MKL_NUM_THREADS=8
 ### 🌐 网络配置
 
 #### 代理设置 (如需要)
+
+##### 本地环境代理
+如果在本地运行，可以配置代理：
 ```bash
-# 设置代理
-export HTTP_PROXY=http://your-proxy:port
-export HTTPS_PROXY=https://your-proxy:port
+# 设置代理环境变量
+export https_proxy=http://127.0.0.1:7890
+export http_proxy=http://127.0.0.1:7890
+export all_proxy=socks5://127.0.0.1:7890
+```
+
+##### SSH远程服务器代理配置
+如果通过SSH控制云服务器，有以下几种方案：
+
+**方案1: SSH隧道转发（推荐）**
+```bash
+# 在本地终端建立SSH隧道，将云服务器的7890端口转发到本地代理
+ssh -L 7890:localhost:7890 user@your-server-ip
+
+# 然后在云服务器上设置代理
+export https_proxy=http://127.0.0.1:7890
+export http_proxy=http://127.0.0.1:7890
+```
+
+**方案2: 云服务器安装代理工具**
+```bash
+# 在云服务器上安装代理工具（如v2ray、clash等）
+# 然后设置相应的代理端口
+export https_proxy=http://127.0.0.1:代理端口
+export http_proxy=http://127.0.0.1:代理端口
+```
+
+**方案3: 使用公共代理服务**
+```bash
+# 使用免费或付费的HTTP代理服务
+export https_proxy=http://proxy-server:port
+export http_proxy=http://proxy-server:port
+```
+
+**方案4: 优先使用Tushare（推荐）**
+由于已集成Tushare数据源，建议主要依赖Tushare获取数据，无需代理：
+```bash
+# 直接运行，Tushare不需要代理
+python run_trading_analysis.py
 ```
 
 #### 数据源备用配置
@@ -186,26 +227,79 @@ python run_trading_analysis.py
 ## 🚨 常见问题解决
 
 ### 问题1: PyTorch下载速度慢
-```bash
-# 症状: 从阿里云镜像下载PyTorch速度很慢
-# 解决方案:
+**现象**: `pip install torch` 下载速度极慢或超时
+**解决方案**:
+1. **使用清华源**:
+   ```bash
+   pip install torch torchvision torchaudio -i https://pypi.tuna.tsinghua.edu.cn/simple/
+   ```
 
-# 方法1: 使用清华源（国内推荐）
-pip install torch torchvision torchaudio -i https://pypi.tuna.tsinghua.edu.cn/simple/
+2. **使用中科大源**:
+   ```bash
+   pip install torch torchvision torchaudio -i https://pypi.mirrors.ustc.edu.cn/simple/
+   ```
 
-# 方法2: 使用中科大源
-pip install torch torchvision torchaudio -i https://pypi.mirrors.ustc.edu.cn/simple/
+3. **使用官方CUDA源**:
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+   ```
 
-# 方法3: 直接从官方下载（海外服务器）
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+4. **手动下载安装**:
+   - 访问 https://pytorch.org/get-started/locally/
+   - 下载对应版本的whl文件
+   - 使用 `pip install 文件名.whl` 安装
 
-# 方法4: 手动下载安装（最稳定）
-# 1. 访问 https://pytorch.org/get-started/locally/
-# 2. 选择对应版本下载whl文件
-# 3. pip install 下载的whl文件
+### 问题2: Yahoo Finance API访问被阻止 (403错误)
+**现象**: 
+```
+Yahoo Finance获取 600588.SS 失败: 403 Client Error: Forbidden
 ```
 
-### 问题2: CUDA版本不匹配
+**原因**: Yahoo Finance对频繁请求或某些地区的访问进行了限制
+
+**解决方案**:
+1. **使用VPN或代理**:
+   ```bash
+   # 设置HTTP代理
+   export http_proxy=http://your-proxy:port
+   export https_proxy=http://your-proxy:port
+   
+   # 运行程序
+   python run_trading_analysis.py
+   ```
+
+2. **SSH隧道代理**（适用于云服务器）:
+   ```bash
+   # 在本地终端建立SSH隧道
+   ssh -L 7890:localhost:7890 user@your-server-ip
+   
+   # 在云服务器上设置代理并运行
+   export https_proxy=http://127.0.0.1:7890
+   export http_proxy=http://127.0.0.1:7890
+   python run_trading_analysis.py
+   ```
+
+3. **修改请求频率**:
+   - 系统已自动增加请求间隔到1秒
+   - 如仍有问题，可在 `real_stock_data_fetcher.py` 中增加 `time.sleep()` 时间
+
+4. **使用备用数据源**:
+   - 系统会自动切换到腾讯财经API
+   - 如需添加更多数据源，可修改 `RealStockDataFetcher` 类
+
+5. **网络环境检查**:
+   ```bash
+   # 检查网络连接
+   ping finance.yahoo.com
+   
+   # 检查DNS解析
+   nslookup finance.yahoo.com
+   
+   # 测试HTTPS连接
+   curl -I https://finance.yahoo.com
+   ```
+
+### 问题3: CUDA版本不匹配
 ```bash
 # 症状: RuntimeError: CUDA version mismatch
 # 解决: 重新安装匹配的PyTorch版本
@@ -213,21 +307,21 @@ pip uninstall torch torchvision torchaudio
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### 问题3: 内存不足
+### 问题4: 内存不足
 ```bash
 # 症状: CUDA out of memory
 # 解决: 减少批处理大小
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
 ```
 
-### 问题4: 网络连接失败
+### 问题5: 网络连接失败
 ```bash
 # 症状: 无法获取股票数据
 # 解决: 检查网络连接和防火墙设置
 ping finance.yahoo.com
 ```
 
-### 问题5: 依赖包冲突
+### 问题6: 依赖包冲突
 ```bash
 # 症状: 包版本冲突
 # 解决: 使用虚拟环境重新安装
@@ -237,7 +331,7 @@ source trading_env/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
-### 问题6: 权限问题
+### 问题7: 权限问题
 ```bash
 # 症状: Permission denied
 # 解决: 检查文件权限
